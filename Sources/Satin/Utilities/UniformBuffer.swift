@@ -19,7 +19,7 @@ open class UniformBuffer: Buffer {
         super.init()
         self.parameters = parameters
         self.alignedSize = ((parameters.size + 255) / 256) * 256
-        setupBuffer(device: device, count: maxBuffersInFlight, options: options)
+        setupBuffer(device: device, count: Satin.maxBuffersInFlight, options: options)
     }
     
     override func setupBuffer(device: MTLDevice, count: Int, options: MTLResourceOptions) {
@@ -38,7 +38,7 @@ open class UniformBuffer: Buffer {
     }
     
     func updateOffset() {
-        index = (index + 1) % maxBuffersInFlight
+        index = (index + 1) % Satin.maxBuffersInFlight
         offset = alignedSize * index
     }
     

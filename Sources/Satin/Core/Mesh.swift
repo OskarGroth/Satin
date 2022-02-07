@@ -115,7 +115,7 @@ open class Mesh: Object, GeometryDelegate {
     
     func updateUniformsBuffer() {
         if vertexUniformsBuffer != nil {
-            uniformBufferIndex = (uniformBufferIndex + 1) % maxBuffersInFlight
+            uniformBufferIndex = (uniformBufferIndex + 1) % Satin.maxBuffersInFlight
             uniformBufferOffset = alignedUniformsSize * uniformBufferIndex
             vertexUniforms = UnsafeMutableRawPointer(vertexUniformsBuffer.contents() + uniformBufferOffset).bindMemory(to: VertexUniforms.self, capacity: 1)
         }
