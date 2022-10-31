@@ -13,7 +13,7 @@ public protocol ParameterDelegate: AnyObject {
     func updated(parameter: Parameter)
 }
 
-public protocol Parameter: Codable, AnyObject {
+public protocol Parameter: Codable, CustomStringConvertible, AnyObject {
     var type: ParameterType { get }
     var string: String { get }
 
@@ -24,6 +24,7 @@ public protocol Parameter: Codable, AnyObject {
 
     var controlType: ControlType { get set }
     var label: String { get }
+    var description: String { get }
 
     var delegate: ParameterDelegate? { get set }
 
@@ -61,7 +62,7 @@ public enum ControlType: String, Codable {
 }
 
 public enum ParameterType: String, Codable {
-    case float, float2, float3, float4, bool, int, int2, int3, int4, double, string, packedfloat3, uint32, float4x4, float3x3, generic
+    case float, float2, float3, float4, bool, int, int2, int3, int4, double, string, packedfloat3, uint32, float4x4, float3x3, float2x2, generic
 
     var metatype: Parameter.Type {
         switch self {

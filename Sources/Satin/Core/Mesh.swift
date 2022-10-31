@@ -11,17 +11,20 @@ import Metal
 import MetalPerformanceShaders
 import simd
 
-open class Mesh: Object, Renderable {
+open class Mesh: Object, Renderable, Intersectable {
     public var triangleFillMode: MTLTriangleFillMode = .fill
     public var cullMode: MTLCullMode = .back
     
     public var instanceCount: Int = 1
+    open var intersectable: Bool {
+        geometry.vertexBuffer != nil && instanceCount > 0
+    }
     
     var uniforms: VertexUniformBuffer?
     
     public var preDraw: ((_ renderEncoder: MTLRenderCommandEncoder) -> ())?
     
-    public var geometry: Geometry {
+    open var geometry: Geometry {
         didSet {
             if geometry != oldValue {
                 geometryPublisher.send(self)
@@ -34,7 +37,7 @@ open class Mesh: Object, Renderable {
     
     public let geometryPublisher = PassthroughSubject<Intersectable, Never>()
     
-    public var material: Material? {
+    open var material: Material? {
         didSet {
             if material != oldValue {
                 setupMaterial()
@@ -80,7 +83,8 @@ open class Mesh: Object, Renderable {
     
     internal func setupGeometrySubscriber() {
         geometrySubscriber?.cancel()
-        geometrySubscriber = geometry.publisher.sink { [unowned self] _ in
+        geometrySubscriber = geometry.publisher.sink { [weak self] _ in
+            guard let self = self else { return }
             self.geometryPublisher.send(self)
             self._localBounds.clear()
         }
@@ -120,7 +124,7 @@ open class Mesh: Object, Renderable {
         super.update()
     }
     
-    open func update(camera: Camera, viewport: simd_float4) {
+    override open func update(camera: Camera, viewport: simd_float4) {
         material?.update(camera: camera)
         uniforms?.update(object: self, camera: camera, viewport: viewport)
     }
@@ -129,6 +133,16 @@ open class Mesh: Object, Renderable {
         draw(renderEncoder: renderEncoder, instanceCount: instanceCount)
     }
     
+    open func bind(_ renderEncoder: MTLRenderCommandEncoder) {
+        bindDrawingStates(renderEncoder)
+    }
+    
+    open func bindDrawingStates(_ renderEncoder: MTLRenderCommandEncoder) {
+        renderEncoder.setFrontFacing(geometry.windingOrder)
+        renderEncoder.setCullMode(cullMode)
+        renderEncoder.setTriangleFillMode(triangleFillMode)
+    }
+
     open func draw(renderEncoder: MTLRenderCommandEncoder, instanceCount: Int) {
         guard instanceCount > 0,
               let vertexBuffer = geometry.vertexBuffer,
@@ -138,11 +152,11 @@ open class Mesh: Object, Renderable {
         else { return }
         
         preDraw?(renderEncoder)
-        
+
         material.bind(renderEncoder)
-        renderEncoder.setFrontFacing(geometry.windingOrder)
-        renderEncoder.setCullMode(cullMode)
-        renderEncoder.setTriangleFillMode(triangleFillMode)
+        
+        self.bind(renderEncoder)
+
         renderEncoder.setVertexBuffer(vertexBuffer, offset: 0, index: VertexBufferIndex.Vertices.rawValue)
         renderEncoder.setVertexBuffer(uniforms.buffer, offset: uniforms.offset, index: VertexBufferIndex.VertexUniforms.rawValue)
         
@@ -194,9 +208,9 @@ open class Mesh: Object, Renderable {
         }
         return result
     }
-}
 
-extension Mesh: Intersectable {
+    // MARK: - Intersectable
+    
     public var vertexStride: Int {
         MemoryLayout<Vertex>.stride
     }
@@ -223,10 +237,6 @@ extension Mesh: Intersectable {
     
     public var intersectionBounds: Bounds {
         geometry.bounds
-    }
-    
-    public var intersectable: Bool {
-        geometry.vertexBuffer != nil && instanceCount > 0
     }
     
     public func intersects(ray: Ray) -> Bool {

@@ -33,7 +33,12 @@ open class TextureComputeSystem {
     }
 
     public var index: Int {
-        return pong()
+        get {
+            return pong()
+        }
+        set {
+            _index = newValue
+        }
     }
 
     public var count: Int {
@@ -166,6 +171,8 @@ open class TextureComputeSystem {
                 }
             }
         }
+        _index = 0
+        _setupTextures = false
     }
 
     open func reset() {
@@ -179,8 +186,6 @@ open class TextureComputeSystem {
     open func update() {
         if _setupTextures {
             setupTextures()
-            _index = 0
-            _setupTextures = false
         }
     }
 

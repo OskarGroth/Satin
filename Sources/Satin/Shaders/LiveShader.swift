@@ -19,14 +19,20 @@ open class LiveShader: SourceShader {
         super.init(label, pipelineURL, vertexFunctionName, fragmentFunctionName)
         setupCompiler()
     }
-
+    
+    public required init(label: String, source: String, vertexFunctionName: String? = nil, fragmentFunctionName: String? = nil) {
+        fatalError("init(_:_:_:_:) has not been implemented")
+    }
+    
     func setupCompiler() {
-        compiler.onUpdate = { [unowned self] in
-            setup()
+        compiler.onUpdate = { [weak self] in
+            guard let self = self else { return }
+            self.setup()
         }
     }
 
     override func setupShaderSource() -> String? {
+        guard let pipelineURL = self.pipelineURL else { return nil }
         do {
             return try compiler.parse(pipelineURL)
         }

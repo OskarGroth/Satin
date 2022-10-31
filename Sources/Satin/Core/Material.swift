@@ -6,6 +6,7 @@
 //  Copyright © 2019 Reza Ali. All rights reserved.
 //
 
+import Combine
 import Metal
 import simd
 
@@ -25,7 +26,31 @@ public struct DepthBias {
     }
 }
 
-open class Material: ShaderDelegate, ParameterGroupDelegate {
+open class Material: Codable, ParameterGroupDelegate, ObservableObject {
+    public required init(from decoder: Decoder) throws {
+        try decode(from: decoder)
+    }
+    
+    public func decode(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        label = try values.decode(String.self, forKey: .label)
+        blending = try values.decode(Blending.self, forKey: .blending)
+        parameters = try values.decode(ParameterGroup.self, forKey: .parameters)
+    }
+    
+    open func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(label, forKey: .label)
+        try container.encode(blending, forKey: .blending)
+        try container.encode(parameters, forKey: .parameters)
+    }
+    
+    public enum CodingKeys: String, CodingKey {
+        case label
+        case blending
+        case parameters
+    }
+
     var prefix: String {
         var result = String(describing: type(of: self)).replacingOccurrences(of: "Material", with: "")
         if let bundleName = Bundle(for: type(of: self)).displayName, bundleName != result {
@@ -46,16 +71,13 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
             }
         }
     }
+
+    private var parametersSubscriber: AnyCancellable?
     
     public var shader: Shader? {
         didSet {
-            if oldValue != shader, let shader = shader {
-                if let oldShader = oldValue, let index = oldShader.delegates.firstIndex(of: self) {
-                    oldShader.delegates.remove(at: index)
-                }
-                
-                shader.delegate = self
-
+            if shader != nil {
+                setupParametersSubscriber()
                 if !isClone {
                     shaderNeedsUpdate = true
                 }
@@ -113,7 +135,7 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
     
     public var uniforms: UniformBuffer?
     
-    public lazy var parameters: ParameterGroup = {
+    public private(set) lazy var parameters: ParameterGroup = {
         let params = ParameterGroup(label)
         params.delegate = self
         return params
@@ -124,17 +146,25 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
         }
     }
     
-    var isClone: Bool = false
+    public private(set) var isClone: Bool = false
     public weak var delegate: MaterialDelegate?
     
     public var pipeline: MTLRenderPipelineState? {
         return shader?.pipeline
     }
     
-    public var context: Context? {
+    public weak var context: Context? {
         didSet {
             if context != nil, context != oldValue {
                 setup()
+            }
+        }
+    }
+    
+    public var instancing: Bool = false {
+        didSet {
+            if oldValue != instancing {
+                shaderInstancingNeedsUpdate = true
             }
         }
     }
@@ -167,6 +197,14 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
     var uniformsNeedsUpdate = false
     var shaderNeedsUpdate = false
     
+    var shaderInstancingNeedsUpdate = false {
+        didSet {
+            if shaderInstancingNeedsUpdate, isClone {
+                shaderNeedsUpdate = true
+            }
+        }
+    }
+    
     var shaderBlendingNeedsUpdate = false {
         didSet {
             if shaderBlendingNeedsUpdate, isClone {
@@ -192,8 +230,7 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
     public required init() {}
     
     public init(shader: Shader) {
-        shader.delegate = self
-        
+        self.instancing = shader.instancing
         self.vertexDescriptor = shader.vertexDescriptor
         self.blending = shader.blending
         self.sourceRGBBlendFactor = shader.sourceRGBBlendFactor
@@ -205,6 +242,16 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
         
         self.label = shader.label
         self.shader = shader
+        
+        setupParametersSubscriber()
+    }
+    
+    func setupParametersSubscriber() {
+        guard let shader = shader else { return }
+        parametersSubscriber?.cancel()
+        parametersSubscriber = shader.parametersPublisher.sink { [weak self] newParameters in
+            self?.updateParameters(newParameters)
+        }
     }
     
     open func setup() {
@@ -234,6 +281,7 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
         }
             
         if let shader = shader {
+            updateShaderInstancing()
             updateShaderBlending()
             updateShaderVertexDescriptor()
             shader.context = context
@@ -267,6 +315,10 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
         
         if shaderVertexDescriptorNeedsUpdate {
             updateShaderVertexDescriptor()
+        }
+        
+        if shaderInstancingNeedsUpdate {
+            updateShaderInstancing()
         }
         
         shader?.update()
@@ -339,6 +391,12 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
         case .custom:
             break
         }
+    }
+    
+    func updateShaderInstancing() {
+        guard let shader = shader else { return }
+        shader.instancing = instancing
+        shaderInstancingNeedsUpdate = false
     }
     
     func updateShaderBlending() {
@@ -472,11 +530,42 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
         }
     }
     
+    public func set(_ name: String, _ value: simd_float2x2) {
+        if let param = parameters.get(name) as? Float2x2Parameter {
+            param.value = value
+        }
+        else {
+            parameters.append(Float2x2Parameter(name, value))
+        }
+    }
+    
+    public func set(_ name: String, _ value: simd_float3x3) {
+        if let param = parameters.get(name) as? Float3x3Parameter {
+            param.value = value
+        }
+        else {
+            parameters.append(Float3x3Parameter(name, value))
+        }
+    }
+    
+    public func set(_ name: String, _ value: simd_float4x4) {
+        if let param = parameters.get(name) as? Float4x4Parameter {
+            param.value = value
+        }
+        else {
+            parameters.append(Float4x4Parameter(name, value))
+        }
+    }
+    
     public func get(_ name: String) -> Parameter? {
         return parameters.get(name)
     }
     
-    deinit {}
+    deinit {
+        parameters.delegate = nil
+        delegate = nil
+        shader = nil
+    }
     
     public func clone() -> Material {
         let clone: Material = type(of: self).init()
@@ -484,6 +573,7 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
         
         clone.label = label
         clone.vertexDescriptor = vertexDescriptor
+        clone.instancing = instancing
         
         clone.delegate = delegate
         clone.parameters = parameters.clone()
@@ -520,30 +610,37 @@ open class Material: ShaderDelegate, ParameterGroupDelegate {
 
 public extension Material {
     func added(parameter: Parameter, from group: ParameterGroup) {
+        objectWillChange.send()
         uniformsNeedsUpdate = true
     }
     
     func removed(parameter: Parameter, from group: ParameterGroup) {
+        objectWillChange.send()
         uniformsNeedsUpdate = true
     }
     
     func loaded(group: ParameterGroup) {
+        objectWillChange.send()
         uniformsNeedsUpdate = true
     }
     
     func saved(group: ParameterGroup) {}
     
     func cleared(group: ParameterGroup) {
+        objectWillChange.send()
         uniformsNeedsUpdate = true
     }
     
-    func update(parameter: Parameter, from group: ParameterGroup) {}
+    func update(parameter: Parameter, from group: ParameterGroup) {
+        objectWillChange.send()
+    }
 }
 
 public extension Material {
-    func updatedParameters(shader: Shader) {
-        parameters.setFrom(shader.parameters)
-        parameters.label = shader.parameters.label
+    func updateParameters(_ newParameters: ParameterGroup) {
+        objectWillChange.send()
+        parameters.setFrom(newParameters)
+        parameters.label = newParameters.label
         uniformsNeedsUpdate = true
         delegate?.updated(material: self)
     }

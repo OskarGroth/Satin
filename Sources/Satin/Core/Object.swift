@@ -37,7 +37,7 @@ open class Object: Codable, ObservableObject {
         try container.encode(children, forKey: .children)
     }
     
-    private enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey {
         case id
         case label
         case position
@@ -47,13 +47,13 @@ open class Object: Codable, ObservableObject {
         case children
     }
     
-    @PublishedDidSet open var id: String = UUID().uuidString
+    @Published open var id: String = UUID().uuidString
     
-    @PublishedDidSet open var label: String = "Object"
+    @Published open var label: String = "Object"
     
-    @PublishedDidSet open var visible: Bool = true
+    @Published open var visible: Bool = true
     
-    open var context: Context? = nil {
+    open weak var context: Context? = nil {
         didSet {
             if context != nil, context != oldValue {
                 setup()
@@ -64,13 +64,13 @@ open class Object: Codable, ObservableObject {
         }
     }
     
-    @PublishedDidSet open var position = simd_make_float3(0, 0, 0) {
+    @Published open var position = simd_make_float3(0, 0, 0) {
         didSet {
             updateMatrix = true
         }
     }
     
-    @PublishedDidSet open var orientation = simd_quatf(matrix_identity_float4x4) {
+    @Published open var orientation = simd_quatf(matrix_identity_float4x4) {
         didSet {
             updateMatrix = true
             _rotationMatrix.clear()
@@ -78,7 +78,7 @@ open class Object: Codable, ObservableObject {
         }
     }
     
-    @PublishedDidSet open var scale = simd_make_float3(1, 1, 1) {
+    @Published open var scale = simd_make_float3(1, 1, 1) {
         didSet {
             updateMatrix = true
         }
@@ -105,27 +105,27 @@ open class Object: Codable, ObservableObject {
     }
     
     public var forwardDirection: simd_float3 {
-        return simd_normalize(orientationMatrix * Satin.worldForwardDirection)
+        return simd_normalize(orientation.act(Satin.worldForwardDirection))
     }
     
     public var upDirection: simd_float3 {
-        return simd_normalize(orientationMatrix * Satin.worldUpDirection)
+        return simd_normalize(orientation.act(Satin.worldUpDirection))
     }
     
     public var rightDirection: simd_float3 {
-        return simd_normalize(orientationMatrix * Satin.worldRightDirection)
+        return simd_normalize(orientation.act(Satin.worldRightDirection))
     }
     
     public var worldForwardDirection: simd_float3 {
-        return simd_normalize(simd_matrix3x3(worldOrientation) * Satin.worldForwardDirection)
+        return simd_normalize(worldOrientation.act(Satin.worldForwardDirection))
     }
     
     public var worldUpDirection: simd_float3 {
-        return simd_normalize(simd_matrix3x3(worldOrientation) * Satin.worldUpDirection)
+        return simd_normalize(worldOrientation.act(Satin.worldUpDirection))
     }
     
     public var worldRightDirection: simd_float3 {
-        return simd_normalize(simd_matrix3x3(worldOrientation) * Satin.worldRightDirection)
+        return simd_normalize(worldOrientation.act(Satin.worldRightDirection))
     }
     
     open weak var parent: Object? {
@@ -134,7 +134,7 @@ open class Object: Codable, ObservableObject {
         }
     }
     
-    @PublishedDidSet open var children: [Object] = [] {
+    @Published open var children: [Object] = [] {
         didSet {
             _worldBounds.clear()
         }
@@ -151,6 +151,7 @@ open class Object: Codable, ObservableObject {
                 _normalMatrix.clear()
                 _worldMatrix.clear()
                 _worldOrientation.clear()
+                transformPublisher.send(self)
                 updateMatrix = false
                 for child in children {
                     child.updateMatrix = true
@@ -171,11 +172,11 @@ open class Object: Codable, ObservableObject {
             let sx = newValue.columns.0
             let sy = newValue.columns.1
             let sz = newValue.columns.2
-            scale = simd_make_float3(length(sx), length(sy), length(sz))
-            let rx = simd_make_float3(sx.x, sx.y, sx.z) / scale.x
-            let ry = simd_make_float3(sy.x, sy.y, sy.z) / scale.y
-            let rz = simd_make_float3(sz.x, sz.y, sz.z) / scale.z
-            orientation = simd_quatf(simd_float3x3(columns: (rx, ry, rz)))
+            scale = simd_make_float3(simd_length(sx), simd_length(sy), simd_length(sz))
+            let rx = simd_make_float3(sx) / scale.x
+            let ry = simd_make_float3(sy) / scale.y
+            let rz = simd_make_float3(sz) / scale.z
+            orientation = simd_quatf(simd_float3x3(rx, ry, rz))
         }
     }
 
@@ -195,36 +196,66 @@ open class Object: Codable, ObservableObject {
     }
     
     public var worldScale: simd_float3 {
-        let wm = worldMatrix
-        let sx = wm.columns.0
-        let sy = wm.columns.1
-        let sz = wm.columns.2
-        return simd_make_float3(length(sx), length(sy), length(sz))
+        get {
+            let wm = worldMatrix
+            let sx = wm.columns.0
+            let sy = wm.columns.1
+            let sz = wm.columns.2
+            return simd_make_float3(length(sx), length(sy), length(sz))
+        }
+        set {
+            if let parent = parent {
+                scale = newValue / parent.worldScale
+            }
+            else {
+                scale = newValue
+            }
+        }
     }
     
     var _worldOrientation = ValueCache<simd_quatf>()
     public var worldOrientation: simd_quatf {
-        _worldOrientation.get {
-            let ws = worldScale
-            let wm = worldMatrix
-            let c0 = wm.columns.0
-            let c1 = wm.columns.1
-            let c2 = wm.columns.2
-            let x = simd_make_float3(c0.x, c0.y, c0.z) / ws.x
-            let y = simd_make_float3(c1.x, c1.y, c1.z) / ws.y
-            let z = simd_make_float3(c2.x, c2.y, c2.z) / ws.z
-            return simd_quatf(simd_float3x3(columns: (x, y, z)))
+        get {
+            _worldOrientation.get {
+                let ws = worldScale
+                let wm = worldMatrix
+                let c0 = wm.columns.0
+                let c1 = wm.columns.1
+                let c2 = wm.columns.2
+                let x = simd_make_float3(c0.x, c0.y, c0.z) / ws.x
+                let y = simd_make_float3(c1.x, c1.y, c1.z) / ws.y
+                let z = simd_make_float3(c2.x, c2.y, c2.z) / ws.z
+                return simd_quatf(simd_float3x3(columns: (x, y, z)))
+            }
+        }
+        set {
+            if let parent = parent {
+                orientation = parent.worldOrientation.inverse * newValue
+            }
+            else {
+                orientation = newValue
+            }
         }
     }
     
     var _worldMatrix = ValueCache<matrix_float4x4>()
     public var worldMatrix: matrix_float4x4 {
-        _worldMatrix.get {
+        get {
+            _worldMatrix.get {
+                if let parent = parent {
+                    return simd_mul(parent.worldMatrix, localMatrix)
+                }
+                else {
+                    return localMatrix
+                }
+            }
+        }
+        set {
             if let parent = parent {
-                return simd_mul(parent.worldMatrix, localMatrix)
+                localMatrix = parent.worldMatrix.inverse * newValue
             }
             else {
-                return localMatrix
+                localMatrix = newValue
             }
         }
     }
@@ -239,6 +270,8 @@ open class Object: Codable, ObservableObject {
             return simd_matrix(simd_make_float3(c0.x, c0.y, c0.z), simd_make_float3(c1.x, c1.y, c1.z), simd_make_float3(c2.x, c2.y, c2.z))
         }
     }
+    
+    public let transformPublisher = PassthroughSubject<Object, Never>()
     
     public init() {}
     
@@ -270,17 +303,31 @@ open class Object: Codable, ObservableObject {
         }
     }
     
-    open func add(_ child: Object) {
+    open func update(camera: Camera, viewport: simd_float4) {}
+    
+    open func insert(_ child: Object, at: Int, setParent: Bool = true) {
         if !children.contains(where: { $0 === child }) {
-            child.parent = self
+            if setParent {
+                child.parent = self
+            }
+            child.context = context
+            children.insert(child, at: at)
+        }
+    }
+    
+    open func add(_ child: Object, _ setParent: Bool = true) {
+        if !children.contains(where: { $0 === child }) {
+            if setParent {
+                child.parent = self
+            }
             child.context = context
             children.append(child)
         }
     }
     
-    open func add(_ objects: [Object]) {
+    open func add(_ objects: [Object], _ setParent: Bool = true) {
         for obj in objects {
-            add(obj)
+            add(obj, setParent)
         }
     }
     
@@ -294,6 +341,10 @@ open class Object: Codable, ObservableObject {
                 return
             }
         }
+    }
+    
+    open func removeFromParent() {
+        parent?.remove(self)
     }
     
     open func removeAll() {
@@ -337,8 +388,12 @@ open class Object: Codable, ObservableObject {
             if child.id == id {
                 return child
             }
-            else if recursive, let found = child.getChildById(id, recursive) {
-                return found
+        }
+        if recursive {
+            for child in children {
+                if let found = child.getChildById(id, recursive) {
+                    return found
+                }
             }
         }
         return nil
